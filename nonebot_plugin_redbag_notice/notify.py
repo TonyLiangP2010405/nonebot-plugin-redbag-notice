@@ -9,13 +9,13 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Sequence
 
-from nonebot import on_message
+from nonebot import on_message, require
 from nonebot.adapters import Event
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
 from nonebot.log import logger
 
 from .detect import RedbagHit, scan_message
-from .store import get_watchers, is_debug, is_empty_alert, should_monitor
+from .store import get_watchers, is_affection_top, is_debug, is_empty_alert, should_monitor
 
 MAX_RECENT_MESSAGE_IDS = 200
 """最近已提醒消息 ID 的缓存长度，用于去重（防止同一条消息重复提醒）"""
@@ -46,14 +46,16 @@ def build_notice(event: GroupMessageEvent, hits: Sequence[RedbagHit]) -> str:
     return "\n".join(lines)
 
 
-async def notify_watchers(bot: Bot, event: GroupMessageEvent, hits: Sequence[RedbagHit]) -> int:
-    """给提醒名单中的每个用户发私聊提醒，返回发送成功的人数
+async def notify_watchers(
+    bot: Bot, event: GroupMessageEvent, hits: Sequence[RedbagHit], extra_users: Sequence[int] = ()
+) -> int:
+    """给提醒名单（及额外用户）中的每个人发私聊提醒，返回发送成功的人数
 
     单个用户发送失败（未加好友、风控等）只记录日志，不影响其他人。
     """
     notice = build_notice(event, hits)
     sent = 0
-    for user_id in get_watchers():
+    for user_id in dict.fromkeys([*get_watchers(), *extra_users]):
         try:
             await bot.send_private_msg(user_id=user_id, message=notice)
         except Exception as error:
@@ -63,9 +65,40 @@ async def notify_watchers(bot: Bot, event: GroupMessageEvent, hits: Sequence[Red
     return sent
 
 
+def _load_mantou_store():
+    """加载 nonebot-plugin-mantou-affection 的存储实例；未安装或结构不符时返回 None"""
+    try:
+        return require("nonebot_plugin_mantou_affection").store
+    except Exception:
+        return None
+
+
 def is_empty_content(message: Message, raw_message: str) -> bool:
     """消息是否没有任何可检测内容（空 text 段、无消息段、raw 为空）"""
     return not str(message).strip() and not raw_message.strip()
+
+
+async def affection_top_user(group_id: int) -> int | None:
+    """该群好感度榜一的用户 QQ（联动 nonebot-plugin-mantou-affection）
+
+    联动未开启、mantou 插件未安装、该群暂无好感度数据或查询失败时返回 ``None``。
+    """
+    if not is_affection_top():
+        return None
+    store = _load_mantou_store()
+    if store is None:
+        return None
+    try:
+        entries = await store.ranking(str(group_id), 1)
+    except Exception as error:
+        logger.warning(f"红包提醒：查询群 {group_id} 好感度榜失败（{error!r}）")
+        return None
+    if not entries:
+        return None
+    try:
+        return int(entries[0].profile.user_id)
+    except (TypeError, ValueError):
+        return None
 
 
 async def refetch_message(bot: Bot, message_id: int) -> tuple[Message, str] | None:
@@ -143,8 +176,11 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> bool:
         for hit in hits:
             logger.info(f"红包调试｜群 {event.group_id}｜消息 {event.message_id}｜来源 {hit.source}\n{hit.detail}")
 
-    sent = await notify_watchers(bot, event, hits)
-    logger.info(f"红包提醒：群 {event.group_id} 检测到红包（{hits[0].keyword}），已通知 {sent} 人")
+    top_user = await affection_top_user(event.group_id)
+    extra = [top_user] if top_user is not None else []
+    sent = await notify_watchers(bot, event, hits, extra_users=extra)
+    top_note = f"（含好感榜一 {top_user}）" if top_user is not None else ""
+    logger.info(f"红包提醒：群 {event.group_id} 检测到红包（{hits[0].keyword}），已通知 {sent} 人{top_note}")
     return True
 
 

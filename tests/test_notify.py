@@ -5,11 +5,14 @@
 """
 
 import json
+from types import SimpleNamespace
 
+import pytest
 from nonebot.adapters.onebot.v11 import Bot, MessageSegment
 from nonebug import App
 
 from nonebot_plugin_redbag_notice import (
+    affection_top_cmd,
     alert_cmd,
     debug_cmd,
     empty_alert_cmd,
@@ -208,6 +211,111 @@ async def test_normal_message_does_not_refetch(data_dir, group_event):
 
     assert await handle_group_message(bot, group_event("今天天气不错")) is False
     assert bot.refetch_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# 好感榜一联动（nonebot-plugin-mantou-affection）
+# ---------------------------------------------------------------------------
+
+
+class FakeMantouStore:
+    """模拟 mantou-affection 的 AffectionStore.ranking 接口"""
+
+    def __init__(self, top_user=None, error=None):
+        self.top_user = top_user
+        self.error = error
+        self.calls: list[tuple[str, int]] = []
+
+    async def ranking(self, group_id, limit):
+        self.calls.append((group_id, limit))
+        if self.error:
+            raise self.error
+        if self.top_user is None:
+            return []
+        return [SimpleNamespace(rank=1, profile=SimpleNamespace(user_id=str(self.top_user)))]
+
+
+def patch_mantou(monkeypatch, mantou_store):
+    from nonebot_plugin_redbag_notice import notify
+
+    monkeypatch.setattr(notify, "_load_mantou_store", lambda: mantou_store)
+
+
+async def test_affection_top_user_also_notified(data_dir, group_event, monkeypatch):
+    """开启榜一提醒后，好感榜一会与提醒名单一起收到通知"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    store.set_affection_top(True)
+    fake = FakeMantouStore(top_user=OTHER_USER_ID)
+    patch_mantou(monkeypatch, fake)
+    bot = RecordingBot()
+
+    assert await handle_group_message(bot, group_event(json_card())) is True
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID, OTHER_USER_ID]
+    assert fake.calls == [(str(GROUP_ID), 1)]
+
+
+async def test_affection_top_dedup_with_watchers(data_dir, group_event, monkeypatch):
+    """榜一已在提醒名单中时只发一条"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    store.set_affection_top(True)
+    patch_mantou(monkeypatch, FakeMantouStore(top_user=USER_ID))
+    bot = RecordingBot()
+
+    assert await handle_group_message(bot, group_event(json_card())) is True
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID]
+
+
+async def test_affection_top_disabled_skips_query(data_dir, group_event, monkeypatch):
+    """未开启榜一提醒时不查询好感榜"""
+    from nonebot_plugin_redbag_notice import notify
+
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    monkeypatch.setattr(
+        notify, "_load_mantou_store", lambda: pytest.fail("不应加载 mantou 插件")
+    )
+    bot = RecordingBot()
+
+    assert await handle_group_message(bot, group_event(json_card())) is True
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID]
+
+
+async def test_affection_top_without_mantou_installed(data_dir, group_event, monkeypatch):
+    """mantou 插件未安装（加载返回 None）时按普通名单提醒"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    store.set_affection_top(True)
+    patch_mantou(monkeypatch, None)
+    bot = RecordingBot()
+
+    assert await handle_group_message(bot, group_event(json_card())) is True
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID]
+
+
+async def test_affection_top_ranking_failure_ignored(data_dir, group_event, monkeypatch):
+    """好感榜查询失败只记日志，不影响普通提醒"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    store.set_affection_top(True)
+    patch_mantou(monkeypatch, FakeMantouStore(error=RuntimeError("模拟查询失败")))
+    bot = RecordingBot()
+
+    assert await handle_group_message(bot, group_event(json_card())) is True
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID]
+
+
+async def test_affection_top_no_ranking_data(data_dir, group_event, monkeypatch):
+    """该群还没有好感度数据时按普通名单提醒"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    store.set_affection_top(True)
+    patch_mantou(monkeypatch, FakeMantouStore(top_user=None))
+    bot = RecordingBot()
+
+    assert await handle_group_message(bot, group_event(json_card())) is True
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID]
 
 
 async def test_debug_mode_dumps_raw_json(data_dir, group_event):
@@ -485,6 +593,42 @@ async def test_empty_alert_switch_requires_superuser(app: App, data_dir, private
         ctx.should_not_pass_permission(empty_alert_cmd)
 
     assert store.is_empty_alert() is False
+
+
+async def test_affection_top_switch(app: App, data_dir, private_event):
+    async with app.test_matcher(affection_top_cmd) as ctx:
+        bot = ctx.create_bot(base=Bot, self_id="99999")
+        event = private_event("红包榜一提醒 开")
+        ctx.receive_event(bot, event)
+        ctx.should_call_send(
+            event,
+            "榜一提醒已开启：群内出现红包时，会额外私聊该群好感度榜第一的用户"
+            "（需安装 nonebot-plugin-mantou-affection，榜一随好感度榜实时变化）。",
+            result=None,
+            bot=bot,
+        )
+        ctx.should_finished(affection_top_cmd)
+
+    assert store.is_affection_top() is True
+
+    async with app.test_matcher(affection_top_cmd) as ctx:
+        bot = ctx.create_bot(base=Bot, self_id="99999")
+        event = private_event("红包榜一提醒 关")
+        ctx.receive_event(bot, event)
+        ctx.should_call_send(event, "榜一提醒已关闭。", result=None, bot=bot)
+        ctx.should_finished(affection_top_cmd)
+
+    assert store.is_affection_top() is False
+
+
+async def test_affection_top_switch_requires_superuser(app: App, data_dir, private_event):
+    async with app.test_matcher(affection_top_cmd) as ctx:
+        bot = ctx.create_bot(base=Bot, self_id="99999")
+        event = private_event("红包榜一提醒 开", user_id=OTHER_USER_ID)
+        ctx.receive_event(bot, event)
+        ctx.should_not_pass_permission(affection_top_cmd)
+
+    assert store.is_affection_top() is False
 
 
 async def test_status_command(app: App, data_dir, private_event):
