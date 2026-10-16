@@ -19,6 +19,7 @@ def test_defaults_when_file_missing(data_dir):
     assert settings.groups == []
     assert settings.users == []
     assert settings.debug is False
+    assert settings.empty_alert is False
     assert not settings_path(data_dir).exists()
     assert store.should_monitor(GROUP_ID) is False
 
@@ -56,6 +57,15 @@ def test_debug_switch(data_dir):
     assert store.is_debug() is False
 
 
+def test_empty_alert_switch(data_dir):
+    assert store.is_empty_alert() is False
+    assert store.set_empty_alert(True) is True
+    assert store.is_empty_alert() is True
+    assert store.set_empty_alert(True) is False
+    assert store.set_empty_alert(False) is True
+    assert store.is_empty_alert() is False
+
+
 def test_should_monitor_needs_group_and_watchers(data_dir):
     store.add_group(GROUP_ID)
     assert store.should_monitor(GROUP_ID) is False  # 提醒名单为空 → 不监听
@@ -74,7 +84,7 @@ def test_settings_persisted_between_reads(data_dir):
     store.set_debug(True)
 
     raw = json.loads(settings_path(data_dir).read_text(encoding="utf-8"))
-    assert raw == {"groups": [GROUP_ID], "users": [USER_ID], "debug": True}
+    assert raw == {"groups": [GROUP_ID], "users": [USER_ID], "debug": True, "empty_alert": False}
     assert store.load_settings().model_dump() == raw
 
 

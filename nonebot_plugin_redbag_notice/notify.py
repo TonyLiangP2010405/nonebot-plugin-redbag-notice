@@ -15,7 +15,7 @@ from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, Message
 from nonebot.log import logger
 
 from .detect import RedbagHit, scan_message
-from .store import get_watchers, is_debug, should_monitor
+from .store import get_watchers, is_debug, is_empty_alert, should_monitor
 
 MAX_RECENT_MESSAGE_IDS = 200
 """最近已提醒消息 ID 的缓存长度，用于去重（防止同一条消息重复提醒）"""
@@ -121,9 +121,22 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> bool:
                     f"｜段类型 {segments or '（空消息）'}｜raw：{raw_message!r}"
                 )
 
-    hits = scan_message(message, raw_message)
-    if not hits:
-        return False
+    if is_empty_content(message, raw_message):
+        # 重拉后仍无内容：协议端未解析出消息（NapCat 下红包即如此），按配置兜底
+        if not is_empty_alert():
+            return False
+        hits = [
+            RedbagHit(
+                keyword="空消息兜底",
+                prompt="协议端未解析出消息内容，疑似红包",
+                detail="（消息无内容）",
+                source="empty",
+            )
+        ]
+    else:
+        hits = scan_message(message, raw_message)
+        if not hits:
+            return False
 
     _recent_message_ids.append(event.message_id)
     if is_debug():

@@ -1,6 +1,6 @@
 [project]
 name = "nonebot-plugin-redbag-notice"
-version = "0.1.2"
+version = "0.2.0"
 description = "QQ 红包私聊提醒插件：超级用户私聊配置监听群，群内出现红包时私聊通知提醒名单"
 readme = "README.md"
 license = { text = "MIT" }

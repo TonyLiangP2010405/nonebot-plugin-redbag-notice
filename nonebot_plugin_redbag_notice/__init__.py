@@ -25,7 +25,7 @@ from .config import Config  # noqa: E402
 try:
     __version__ = pkg_version("nonebot-plugin-redbag-notice")
 except PackageNotFoundError:
-    __version__ = "0.1.2"
+    __version__ = "0.2.0"
 
 __plugin_meta__ = PluginMetadata(
     name="红包提醒",
@@ -37,6 +37,7 @@ __plugin_meta__ = PluginMetadata(
         "取消监听 <群号> —— 移除监听群\n"
         "监听列表 —— 列出监听群\n"
         "红包调试 开/关 —— 调试模式，命中红包时把原始 json 段写进日志\n"
+        "红包空提醒 开/关 —— 无内容消息（疑似红包）兜底提醒\n"
         "【私聊】所有人：\n"
         "红包提醒 开 —— 把自己加入提醒名单\n"
         "红包提醒 关 —— 把自己移出提醒名单\n"
@@ -66,6 +67,7 @@ watch_del_cmd = on_command("取消监听", rule=_is_private_chat, permission=SUP
 watch_list_cmd = on_command("监听列表", rule=_is_private_chat, permission=SUPERUSER, priority=10, block=True)
 alert_cmd = on_command("红包提醒", rule=_is_private_chat, priority=10, block=True)
 debug_cmd = on_command("红包调试", rule=_is_private_chat, permission=SUPERUSER, priority=10, block=True)
+empty_alert_cmd = on_command("红包空提醒", rule=_is_private_chat, permission=SUPERUSER, priority=10, block=True)
 
 
 def _command_prefix() -> str:
@@ -87,6 +89,7 @@ def status_text() -> str:
         f"监听群（{len(settings.groups)} 个）：{_join_ids(settings.groups)}\n"
         f"提醒用户（{len(settings.users)} 人）：{_join_ids(settings.users)}\n"
         f"调试模式：{'开启' if settings.debug else '关闭'}\n"
+        f"空消息提醒：{'开启' if settings.empty_alert else '关闭'}\n"
         f"数据文件：{store.get_data_file()}\n"
         "\n"
         "管理命令（仅超级用户，私聊）：\n"
@@ -94,6 +97,7 @@ def status_text() -> str:
         f"{prefix}取消监听 <群号> —— 移除监听群\n"
         f"{prefix}监听列表 —— 列出监听群\n"
         f"{prefix}红包调试 开/关 —— 调试模式\n"
+        f"{prefix}红包空提醒 开/关 —— 无内容消息（疑似红包）兜底提醒\n"
         "\n"
         "提醒命令（所有人，私聊）：\n"
         f"{prefix}红包提醒 开 —— 收到红包时私聊通知我\n"
@@ -189,3 +193,19 @@ async def _handle_debug(args: Message = CommandArg()) -> None:
     if action:
         await debug_cmd.finish("调试模式已开启：命中红包时会把原始 json 段写入日志。" if changed else "调试模式本来就是开启的。")
     await debug_cmd.finish("调试模式已关闭。" if changed else "调试模式本来就是关闭的。")
+
+
+@empty_alert_cmd.handle()
+async def _handle_empty_alert(args: Message = CommandArg()) -> None:
+    prefix = _command_prefix()
+    action = parse_switch(args.extract_plain_text())
+    if action is None:
+        await empty_alert_cmd.finish(f"用法：{prefix}红包空提醒 开 / {prefix}红包空提醒 关")
+    changed = store.set_empty_alert(action)
+    if action:
+        await empty_alert_cmd.finish(
+            "空消息提醒已开启：被监听群收到无内容消息（疑似红包）时会私聊通知。"
+            if changed
+            else "空消息提醒本来就是开启的。"
+        )
+    await empty_alert_cmd.finish("空消息提醒已关闭。" if changed else "空消息提醒本来就是关闭的。")

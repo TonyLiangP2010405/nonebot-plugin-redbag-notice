@@ -34,6 +34,12 @@ class RedbagSettings(BaseModel):
     debug: bool = False
     """调试模式：命中红包时把原始 json 段写入日志"""
 
+    empty_alert: bool = False
+    """空消息兜底：被监听群收到无内容消息时按疑似红包提醒
+
+    部分协议端（如 NapCat）未实现红包元素（ElementType 9 / WALLET）的解析，
+    红包会上报为无内容消息；开启后这类消息按疑似红包通知。"""
+
 
 def _data_dir_override() -> str:
     """读取配置中的数据目录覆盖项；nonebot 未初始化时返回空串"""
@@ -138,6 +144,16 @@ def set_debug(enabled: bool) -> bool:
     return True
 
 
+def set_empty_alert(enabled: bool) -> bool:
+    """设置空消息兜底提醒，返回是否发生了变更"""
+    settings = load_settings()
+    if settings.empty_alert == enabled:
+        return False
+    settings.empty_alert = enabled
+    save_settings(settings)
+    return True
+
+
 def get_groups() -> list[int]:
     """当前监听群列表"""
     return list(load_settings().groups)
@@ -151,6 +167,11 @@ def get_watchers() -> list[int]:
 def is_debug() -> bool:
     """调试模式是否开启"""
     return load_settings().debug
+
+
+def is_empty_alert() -> bool:
+    """空消息兜底提醒是否开启"""
+    return load_settings().empty_alert
 
 
 def is_watched_group(group_id: int) -> bool:
