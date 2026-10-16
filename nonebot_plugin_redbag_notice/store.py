@@ -41,7 +41,7 @@ class RedbagSettings(BaseModel):
     红包会上报为无内容消息；开启后这类消息按疑似红包通知。"""
 
     affection_top: bool = False
-    """好感榜一联动：红包命中时额外私聊该群好感度榜第一的用户
+    """好感榜一联动：红包命中时额外私聊该群好感度榜第一（含并列）的用户
 
     联动 nonebot-plugin-mantou-affection，每次命中现查榜一，
     不再是榜一时自然不再提醒。插件未安装时该开关不生效。"""

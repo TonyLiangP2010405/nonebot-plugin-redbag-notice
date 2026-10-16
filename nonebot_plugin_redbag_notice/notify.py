@@ -78,27 +78,38 @@ def is_empty_content(message: Message, raw_message: str) -> bool:
     return not str(message).strip() and not raw_message.strip()
 
 
-async def affection_top_user(group_id: int) -> int | None:
-    """该群好感度榜一的用户 QQ（联动 nonebot-plugin-mantou-affection）
+TOP_RANKING_SCAN_LIMIT = 50
+"""好感榜查询条数上限，用于收集与榜一好感度相同的并列用户"""
 
-    联动未开启、mantou 插件未安装、该群暂无好感度数据或查询失败时返回 ``None``。
+
+async def affection_top_users(group_id: int) -> list[int]:
+    """该群好感度榜一（含并列）的用户 QQ 列表（联动 nonebot-plugin-mantou-affection）
+
+    好感度与第一名相同的用户都算并列榜一，全部返回。
+    联动未开启、mantou 插件未安装、该群暂无好感度数据或查询失败时返回空列表。
     """
     if not is_affection_top():
-        return None
+        return []
     store = _load_mantou_store()
     if store is None:
-        return None
+        return []
     try:
-        entries = await store.ranking(str(group_id), 1)
+        entries = await store.ranking(str(group_id), TOP_RANKING_SCAN_LIMIT)
     except Exception as error:
         logger.warning(f"红包提醒：查询群 {group_id} 好感度榜失败（{error!r}）")
-        return None
+        return []
     if not entries:
-        return None
-    try:
-        return int(entries[0].profile.user_id)
-    except (TypeError, ValueError):
-        return None
+        return []
+    top_affection = entries[0].profile.affection
+    users: list[int] = []
+    for entry in entries:
+        if entry.profile.affection != top_affection:
+            break
+        try:
+            users.append(int(entry.profile.user_id))
+        except (TypeError, ValueError):
+            continue
+    return users
 
 
 async def refetch_message(bot: Bot, message_id: int) -> tuple[Message, str] | None:
@@ -176,10 +187,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> bool:
         for hit in hits:
             logger.info(f"红包调试｜群 {event.group_id}｜消息 {event.message_id}｜来源 {hit.source}\n{hit.detail}")
 
-    top_user = await affection_top_user(event.group_id)
-    extra = [top_user] if top_user is not None else []
-    sent = await notify_watchers(bot, event, hits, extra_users=extra)
-    top_note = f"（含好感榜一 {top_user}）" if top_user is not None else ""
+    top_users = await affection_top_users(event.group_id)
+    sent = await notify_watchers(bot, event, hits, extra_users=top_users)
+    top_note = f"（含好感榜一 {'、'.join(str(user) for user in top_users)}）" if top_users else ""
     logger.info(f"红包提醒：群 {event.group_id} 检测到红包（{hits[0].keyword}），已通知 {sent} 人{top_note}")
     return True
 

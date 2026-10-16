@@ -143,7 +143,7 @@ REDBAG_NOTICE_DATA_DIR=
 
 如果同时安装了 [nonebot-plugin-mantou-affection](https://github.com/TonyLiangP2010405/nonebot-plugin-mantou-affection)，
 可以用 `/红包榜一提醒 开` 开启联动：被监听群里命中红包时，除了提醒名单，还会**额外私聊
-该群好感度榜第一的用户**。
+该群好感度榜第一（含并列）的用户**——好感度与第一名相同的人都算榜一，全部通知。
 
 - 榜一是**每次命中时现查**的（排序规则与 `/馒头好感榜` 一致），不再是榜一后自然不再收到
   提醒，不需要手动移除；

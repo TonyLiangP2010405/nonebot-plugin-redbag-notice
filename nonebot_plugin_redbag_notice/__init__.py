@@ -25,7 +25,7 @@ from .config import Config  # noqa: E402
 try:
     __version__ = pkg_version("nonebot-plugin-redbag-notice")
 except PackageNotFoundError:
-    __version__ = "0.3.0"
+    __version__ = "0.3.1"
 
 __plugin_meta__ = PluginMetadata(
     name="红包提醒",
@@ -224,7 +224,7 @@ async def _handle_affection_top(args: Message = CommandArg()) -> None:
     changed = store.set_affection_top(action)
     if action:
         await affection_top_cmd.finish(
-            "榜一提醒已开启：群内出现红包时，会额外私聊该群好感度榜第一的用户"
+            "榜一提醒已开启：群内出现红包时，会额外私聊该群好感度榜第一（含并列）的用户"
             "（需安装 nonebot-plugin-mantou-affection，榜一随好感度榜实时变化）。"
             if changed
             else "榜一提醒本来就是开启的。"
