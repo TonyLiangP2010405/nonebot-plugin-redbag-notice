@@ -47,17 +47,25 @@ def json_card(detail: str = REDBAG_JSON) -> MessageSegment:
 
 
 class RecordingBot:
-    """只实现 send_private_msg 的假 Bot，用于断言私聊提醒内容"""
+    """只实现 send_private_msg / send_group_msg 的假 Bot，用于断言提醒内容"""
 
-    def __init__(self, fail_for=()):
+    def __init__(self, fail_for=(), fail_group=False):
         self.sent: list[tuple[int, str]] = []
+        self.group_sent: list[tuple[int, object]] = []
         self._fail_for = set(fail_for)
+        self._fail_group = fail_group
 
     async def send_private_msg(self, user_id, message, **kwargs):
         if user_id in self._fail_for:
             raise RuntimeError("模拟发送失败")
         self.sent.append((user_id, message))
         return {"message_id": len(self.sent)}
+
+    async def send_group_msg(self, group_id, message, **kwargs):
+        if self._fail_group:
+            raise RuntimeError("模拟群消息发送失败")
+        self.group_sent.append((group_id, message))
+        return {"message_id": 100 + len(self.group_sent)}
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +251,8 @@ def patch_mantou(monkeypatch, mantou_store):
     monkeypatch.setattr(notify, "_load_mantou_store", lambda: mantou_store)
 
 
-async def test_affection_top_user_also_notified(data_dir, group_event, monkeypatch):
-    """开启榜一提醒后，好感榜一会与提醒名单一起收到通知"""
+async def test_affection_top_user_at_in_group(data_dir, group_event, monkeypatch):
+    """开启榜一提醒后，好感榜一在群里被 @，私聊名单不受影响"""
     store.add_group(GROUP_ID)
     store.add_user(USER_ID)
     store.set_affection_top(True)
@@ -253,12 +261,17 @@ async def test_affection_top_user_also_notified(data_dir, group_event, monkeypat
     bot = RecordingBot()
 
     assert await handle_group_message(bot, group_event(json_card())) is True
-    assert [user_id for user_id, _ in bot.sent] == [USER_ID, OTHER_USER_ID]
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID]  # 私聊只发提醒名单
     assert fake.calls == [(str(GROUP_ID), notify_module.TOP_RANKING_SCAN_LIMIT)]
+    assert len(bot.group_sent) == 1
+    group_id, message = bot.group_sent[0]
+    assert group_id == GROUP_ID
+    assert str(message).startswith(f"[CQ:at,qq={OTHER_USER_ID}]")
+    assert "【红包提醒】测试群友（20001）发红包啦，快抢！" in str(message)
 
 
-async def test_affection_top_tied_users_all_notified(data_dir, group_event, monkeypatch):
-    """好感度相同的并列榜一全部收到通知，第二名不收到"""
+async def test_affection_top_tied_users_all_at(data_dir, group_event, monkeypatch):
+    """好感度相同的并列榜一在同一条群消息里全部被 @，第二名不被 @"""
     store.add_group(GROUP_ID)
     store.add_user(USER_ID)
     store.set_affection_top(True)
@@ -267,11 +280,15 @@ async def test_affection_top_tied_users_all_notified(data_dir, group_event, monk
     bot = RecordingBot()
 
     assert await handle_group_message(bot, group_event(json_card())) is True
-    assert [user_id for user_id, _ in bot.sent] == [USER_ID, 20002, 20003]
+    assert len(bot.group_sent) == 1
+    text = str(bot.group_sent[0][1])
+    assert "[CQ:at,qq=20002]" in text
+    assert "[CQ:at,qq=20003]" in text
+    assert "20004" not in text
 
 
-async def test_affection_top_dedup_with_watchers(data_dir, group_event, monkeypatch):
-    """榜一已在提醒名单中时只发一条"""
+async def test_affection_top_watcher_still_gets_private(data_dir, group_event, monkeypatch):
+    """榜一本来就在私聊名单里：私聊照发，群里也 @"""
     store.add_group(GROUP_ID)
     store.add_user(USER_ID)
     store.set_affection_top(True)
@@ -280,6 +297,21 @@ async def test_affection_top_dedup_with_watchers(data_dir, group_event, monkeypa
 
     assert await handle_group_message(bot, group_event(json_card())) is True
     assert [user_id for user_id, _ in bot.sent] == [USER_ID]
+    assert len(bot.group_sent) == 1
+    assert f"[CQ:at,qq={USER_ID}]" in str(bot.group_sent[0][1])
+
+
+async def test_affection_top_group_send_failure_ignored(data_dir, group_event, monkeypatch):
+    """群内 @ 发送失败只记日志，不影响私聊提醒"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    store.set_affection_top(True)
+    patch_mantou(monkeypatch, FakeMantouStore(entries=[(OTHER_USER_ID, 10)]))
+    bot = RecordingBot(fail_group=True)
+
+    assert await handle_group_message(bot, group_event(json_card())) is True
+    assert [user_id for user_id, _ in bot.sent] == [USER_ID]
+    assert bot.group_sent == []
 
 
 async def test_affection_top_disabled_skips_query(data_dir, group_event, monkeypatch):
@@ -615,7 +647,7 @@ async def test_affection_top_switch(app: App, data_dir, private_event):
         ctx.receive_event(bot, event)
         ctx.should_call_send(
             event,
-            "榜一提醒已开启：群内出现红包时，会额外私聊该群好感度榜第一（含并列）的用户"
+            "榜一提醒已开启：群内出现红包时，会在群里 @ 该群好感度榜第一（含并列）的用户"
             "（需安装 nonebot-plugin-mantou-affection，榜一随好感度榜实时变化）。",
             result=None,
             bot=bot,

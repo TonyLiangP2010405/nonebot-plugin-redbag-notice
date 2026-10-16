@@ -46,6 +46,20 @@ def build_notice(event: GroupMessageEvent, hits: Sequence[RedbagHit]) -> str:
     return "\n".join(lines)
 
 
+def build_top_at_message(event: GroupMessageEvent, hits: Sequence[RedbagHit], top_users: Sequence[int]) -> Message:
+    """组装群内 @ 好感榜一（含并列）的提醒消息"""
+    message = Message()
+    for user_id in top_users:
+        message += MessageSegment.at(user_id)
+    message += MessageSegment.text(
+        f" 【红包提醒】{sender_name(event)}（{event.user_id}）发红包啦，快抢！"
+    )
+    prompts = list(dict.fromkeys(hit.prompt for hit in hits if hit.prompt))
+    if prompts:
+        message += MessageSegment.text(f"（{' / '.join(prompts)}）")
+    return message
+
+
 async def notify_watchers(
     bot: Bot, event: GroupMessageEvent, hits: Sequence[RedbagHit], extra_users: Sequence[int] = ()
 ) -> int:
@@ -63,6 +77,25 @@ async def notify_watchers(
         else:
             sent += 1
     return sent
+
+
+async def notify_affection_top(
+    bot: Bot, event: GroupMessageEvent, hits: Sequence[RedbagHit], top_users: Sequence[int]
+) -> bool:
+    """在群里 @ 好感榜一（含并列）提醒有红包，返回是否发送成功
+
+    发送失败（权限、风控等）只记录日志，不影响私聊提醒。
+    """
+    if not top_users:
+        return False
+    try:
+        await bot.send_group_msg(
+            group_id=event.group_id, message=build_top_at_message(event, hits, top_users)
+        )
+    except Exception as error:
+        logger.warning(f"红包提醒群内 @ 榜一发送失败：群 {event.group_id}（{error!r}）")
+        return False
+    return True
 
 
 def _load_mantou_store():
@@ -188,8 +221,12 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> bool:
             logger.info(f"红包调试｜群 {event.group_id}｜消息 {event.message_id}｜来源 {hit.source}\n{hit.detail}")
 
     top_users = await affection_top_users(event.group_id)
-    sent = await notify_watchers(bot, event, hits, extra_users=top_users)
-    top_note = f"（含好感榜一 {'、'.join(str(user) for user in top_users)}）" if top_users else ""
+    sent = await notify_watchers(bot, event, hits)
+    top_note = ""
+    if top_users:
+        at_sent = await notify_affection_top(bot, event, hits, top_users)
+        top_names = "、".join(str(user) for user in top_users)
+        top_note = f"，好感榜一 {top_names} {'已群内提醒' if at_sent else '群内提醒发送失败'}"
     logger.info(f"红包提醒：群 {event.group_id} 检测到红包（{hits[0].keyword}），已通知 {sent} 人{top_note}")
     return True
 
