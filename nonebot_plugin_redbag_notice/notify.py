@@ -70,6 +70,13 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> bool:
     if event.message_id in _recent_message_ids:
         return False
 
+    if is_debug():
+        segments = [segment.type for segment in event.get_message()]
+        logger.info(
+            f"红包调试｜群 {event.group_id}｜收到消息 {event.message_id}"
+            f"｜段类型 {segments or '（空消息）'}｜raw：{event.raw_message!r}"
+        )
+
     hits = scan_message(event.get_message(), event.raw_message)
     if not hits:
         return False

@@ -25,7 +25,7 @@ from .config import Config  # noqa: E402
 try:
     __version__ = pkg_version("nonebot-plugin-redbag-notice")
 except PackageNotFoundError:
-    __version__ = "0.1.0"
+    __version__ = "0.1.1"
 
 __plugin_meta__ = PluginMetadata(
     name="红包提醒",
