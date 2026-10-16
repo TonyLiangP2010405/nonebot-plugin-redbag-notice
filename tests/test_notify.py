@@ -132,6 +132,67 @@ async def test_send_failure_does_not_block_others(data_dir, group_event):
     assert [user_id for user_id, _ in bot.sent] == [OTHER_USER_ID]
 
 
+class RefetchBot(RecordingBot):
+    """带 get_msg 的假 Bot，模拟 NapCat 上报空消息但接口能拉到完整内容"""
+
+    def __init__(self, refetch_result=None, **kwargs):
+        super().__init__(**kwargs)
+        self.refetch_result = refetch_result
+        self.refetch_calls = 0
+
+    async def get_msg(self, message_id, **kwargs):
+        self.refetch_calls += 1
+        if isinstance(self.refetch_result, Exception):
+            raise self.refetch_result
+        return self.refetch_result
+
+
+async def test_empty_message_refetched_and_notified(data_dir, group_event):
+    """NapCat 上报空 text 段时，通过 get_msg 重拉到 json 段并正常提醒"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    bot = RefetchBot(
+        refetch_result={
+            "message": [{"type": "json", "data": {"data": REDBAG_JSON}}],
+            "raw_message": "",
+        }
+    )
+
+    assert await handle_group_message(bot, group_event("")) is True
+    assert bot.refetch_calls == 1
+    assert bot.sent[0][1].startswith("【红包提醒】\n群号：123456")
+
+
+async def test_empty_message_refetch_also_empty(data_dir, group_event):
+    """重拉后仍然没有内容时不提醒"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    bot = RefetchBot(refetch_result={"message": [{"type": "text", "data": {"text": ""}}], "raw_message": ""})
+
+    assert await handle_group_message(bot, group_event("")) is False
+    assert bot.sent == []
+
+
+async def test_empty_message_refetch_failure_ignored(data_dir, group_event):
+    """get_msg 调用失败只记日志，不影响流程"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    bot = RefetchBot(refetch_result=RuntimeError("模拟接口失败"))
+
+    assert await handle_group_message(bot, group_event("")) is False
+    assert bot.sent == []
+
+
+async def test_normal_message_does_not_refetch(data_dir, group_event):
+    """有内容的消息不会触发重拉"""
+    store.add_group(GROUP_ID)
+    store.add_user(USER_ID)
+    bot = RefetchBot()
+
+    assert await handle_group_message(bot, group_event("今天天气不错")) is False
+    assert bot.refetch_calls == 0
+
+
 async def test_debug_mode_dumps_raw_json(data_dir, group_event):
     from nonebot.log import logger
 

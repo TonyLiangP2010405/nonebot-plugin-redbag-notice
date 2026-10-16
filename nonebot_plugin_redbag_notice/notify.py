@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from nonebot import on_message
 from nonebot.adapters import Event
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
 from nonebot.log import logger
 
 from .detect import RedbagHit, scan_message
@@ -63,6 +63,37 @@ async def notify_watchers(bot: Bot, event: GroupMessageEvent, hits: Sequence[Red
     return sent
 
 
+def is_empty_content(message: Message, raw_message: str) -> bool:
+    """消息是否没有任何可检测内容（空 text 段、无消息段、raw 为空）"""
+    return not str(message).strip() and not raw_message.strip()
+
+
+async def refetch_message(bot: Bot, message_id: int) -> tuple[Message, str] | None:
+    """消息内容为空时，通过 ``get_msg`` 重新拉取一次完整消息
+
+    部分实现（如个别 NapCat 版本）上报红包等特殊消息时只给出一个空 text 段，
+    但 ``get_msg`` 接口可能返回包含 json 段的完整内容，因此空消息值得重拉一次。
+    拉取失败或返回中没有任何内容时返回 ``None``。
+    """
+    try:
+        data = await bot.get_msg(message_id=message_id)
+    except Exception as error:
+        logger.warning(f"红包提醒：重新拉取消息 {message_id} 失败（{error!r}）")
+        return None
+    message = data.get("message")
+    raw = data.get("raw_message")
+    if isinstance(message, list):
+        parsed = Message(MessageSegment(**item) if isinstance(item, dict) else item for item in message)
+    elif message is not None:
+        parsed = Message(message)
+    elif isinstance(raw, str):
+        parsed = Message(raw)
+    else:
+        return None
+    raw_text = raw if isinstance(raw, str) else parsed.extract_plain_text()
+    return parsed, raw_text
+
+
 async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> bool:
     """处理一条群消息：命中红包则私聊提醒，返回是否真的触发了提醒"""
     if not should_monitor(event.group_id):
@@ -70,14 +101,27 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent) -> bool:
     if event.message_id in _recent_message_ids:
         return False
 
+    message = event.get_message()
+    raw_message = event.raw_message
     if is_debug():
-        segments = [segment.type for segment in event.get_message()]
+        segments = [segment.type for segment in message]
         logger.info(
             f"红包调试｜群 {event.group_id}｜收到消息 {event.message_id}"
-            f"｜段类型 {segments or '（空消息）'}｜raw：{event.raw_message!r}"
+            f"｜段类型 {segments or '（空消息）'}｜raw：{raw_message!r}"
         )
 
-    hits = scan_message(event.get_message(), event.raw_message)
+    if is_empty_content(message, raw_message):
+        refetched = await refetch_message(bot, event.message_id)
+        if refetched is not None:
+            message, raw_message = refetched
+            if is_debug():
+                segments = [segment.type for segment in message]
+                logger.info(
+                    f"红包调试｜群 {event.group_id}｜消息 {event.message_id} 重新拉取"
+                    f"｜段类型 {segments or '（空消息）'}｜raw：{raw_message!r}"
+                )
+
+    hits = scan_message(message, raw_message)
     if not hits:
         return False
 
